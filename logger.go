@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Logger writes structured log data to sharded memory buffers and flushes
@@ -173,7 +175,9 @@ func (l *Logger) handleFlush(first *Buffer) {
 	}
 
 	if len(dataSlices) > 0 {
-		l.fileWriter.WriteVectored(dataSlices)
+		if _, err := l.fileWriter.WriteVectored(dataSlices); err != nil {
+			log.Error().Err(err).Int("buffers", len(dataSlices)).Msg("WriteVectored failed, data lost")
+		}
 	}
 
 	for _, buf := range buffers {

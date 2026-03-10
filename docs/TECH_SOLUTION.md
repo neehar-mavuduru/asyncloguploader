@@ -216,6 +216,7 @@ lm.Close()
 | **Naming** | `{base}_{YYYY-MM-DD_HH-MM-SS}_{seq}.log.tmp` → renamed to `.log` on seal |
 | **Discovery** | Uploader scans `logs/` for `.log` files; `.tmp` files are skipped |
 | **Platform** | Linux: `O_DIRECT`, `Pwritev`, `Fallocate`; others: `os.WriteAt` |
+| **O_DIRECT alignment** | Each buffer is padded to 4096 bytes; `fileOffset` advances by padded total so it stays aligned. Zero-padding gaps between writes are skipped by the record reader (zero-length entries). |
 
 ---
 
@@ -443,6 +444,7 @@ lm.Close()  // Flushes all loggers, stops uploader, waits for in-flight uploads
 | High `DroppedLogs` | Sustained backpressure | Scale buffers; reduce write rate or add backpressure upstream |
 | Upload errors | GCS permissions, network | Check ADC; verify bucket/prefix; inspect `UploadErrors`, `RetryCount` |
 | `.tmp` files accumulating | Crash during write | Manual cleanup of old `.tmp` files; ensure `Close()` on shutdown |
+| `WriteVectored failed` in logs | I/O error on disk write | Check disk health; verify O_DIRECT support on filesystem |
 
 ---
 
