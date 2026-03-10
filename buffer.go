@@ -7,10 +7,16 @@ import (
 	"sync/atomic"
 )
 
+// headerOffset reserves 8 bytes at the start of each buffer:
+//   - bytes 0-3: block size (uint32, = capacity)
+//   - bytes 4-7: valid data offset (uint32, = write offset at flush time)
+// This header makes each on-disk block self-describing for the reader.
 const headerOffset = 8
 
 // Buffer is a lock-free, CAS-based write buffer backed by mmap on Linux
-// or a heap-allocated byte slice on other platforms.
+// or a heap-allocated byte slice on other platforms. The entire buffer
+// (including the header) is flushed to disk as a single block, enabling
+// zero-copy writes: no allocation or memcpy in the flush path.
 type Buffer struct {
 	data     []byte
 	offset   atomic.Int32
@@ -107,15 +113,24 @@ func (b *Buffer) Close() {
 	}
 }
 
-// DataSlice returns the portion of the buffer that contains written records,
-// from headerOffset to the current write offset. Returns nil if no data has
-// been written.
-func (b *Buffer) DataSlice() []byte {
-	offset := b.offset.Load()
-	if offset <= int32(headerOffset) {
-		return nil
-	}
-	return b.data[headerOffset:offset]
+// PrepareForFlush writes the block header (block size + valid offset) into
+// the first 8 bytes. Must be called after WaitForInflight and before passing
+// the buffer to WriteVectored.
+func (b *Buffer) PrepareForFlush() {
+	binary.LittleEndian.PutUint32(b.data[0:4], uint32(b.capacity))
+	binary.LittleEndian.PutUint32(b.data[4:8], uint32(b.offset.Load()))
+}
+
+// FullBlock returns the entire buffer as a slice [0:capacity]. The address is
+// page-aligned (mmap on Linux) and the size is 4096-aligned, satisfying
+// O_DIRECT requirements without any copy.
+func (b *Buffer) FullBlock() []byte {
+	return b.data[:b.capacity]
+}
+
+// HasData returns true if any records have been written beyond the header.
+func (b *Buffer) HasData() bool {
+	return b.offset.Load() > int32(headerOffset)
 }
 
 func alignTo4096(n int) int {

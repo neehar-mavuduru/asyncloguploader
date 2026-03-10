@@ -13,7 +13,7 @@ type Config struct {
 	BufferSize      int
 	MaxFileSize     int64
 	LogFilePath     string
-	FlushInterval   time.Duration // interval for periodic buffer flush; 0 = 1 minute
+	FlushInterval   time.Duration // interval for periodic buffer flush; 0 = 5 minutes
 	GCSUploadConfig *GCSUploadConfig
 }
 
@@ -32,7 +32,7 @@ const (
 	defaultMaxRetries   = 3
 	defaultGRPCPoolSize = 64
 	defaultPollInterval = 3 * time.Second
-	defaultFlushInterval = 1 * time.Minute
+	defaultFlushInterval = 5 * time.Minute
 	minShardCapacity    = 65536 // 64 KB
 )
 

@@ -40,6 +40,9 @@ func newTestLogger(t *testing.T, cfg Config) *Logger {
 	return logger
 }
 
+// readAllRecords parses the block-based file format. Each block has an 8-byte
+// header: [4 bytes blockSize][4 bytes validOffset], followed by length-prefixed
+// records in bytes [8..validOffset], and zero-padding to blockSize.
 func readAllRecords(t *testing.T, path string) [][]byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -48,22 +51,42 @@ func readAllRecords(t *testing.T, path string) [][]byte {
 	}
 
 	var records [][]byte
-	offset := 0
-	for offset+4 <= len(data) {
-		length := binary.LittleEndian.Uint32(data[offset:])
-		offset += 4
-		if length == 0 {
-			continue
+	pos := 0
+
+	for pos+8 <= len(data) {
+		blockSize := int(binary.LittleEndian.Uint32(data[pos:]))
+		validOff := int(binary.LittleEndian.Uint32(data[pos+4:]))
+
+		if blockSize == 0 {
+			break
 		}
-		if offset+int(length) > len(data) {
-			t.Fatalf("malformed record at offset %d: length %d exceeds data size %d",
-				offset-4, length, len(data))
+		if pos+blockSize > len(data) {
+			t.Fatalf("block at pos %d: blockSize %d exceeds file size %d", pos, blockSize, len(data))
 		}
-		record := make([]byte, length)
-		copy(record, data[offset:offset+int(length)])
-		records = append(records, record)
-		offset += int(length)
+		if validOff < 8 || validOff > blockSize {
+			t.Fatalf("block at pos %d: invalid validOffset %d (blockSize %d)", pos, validOff, blockSize)
+		}
+
+		offset := pos + 8
+		end := pos + validOff
+		for offset+4 <= end {
+			length := int(binary.LittleEndian.Uint32(data[offset:]))
+			offset += 4
+			if length == 0 {
+				continue
+			}
+			if offset+length > end {
+				t.Fatalf("record at offset %d: length %d exceeds valid data boundary %d", offset-4, length, end)
+			}
+			record := make([]byte, length)
+			copy(record, data[offset:offset+length])
+			records = append(records, record)
+			offset += length
+		}
+
+		pos += blockSize
 	}
+
 	return records
 }
 

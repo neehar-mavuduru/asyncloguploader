@@ -170,14 +170,29 @@ lm.Close()
 
 ### 4.3 Buffer
 
-**Purpose:** Lock-free, CAS-based write buffer for length-prefixed records.
+**Purpose:** Lock-free, CAS-based write buffer for length-prefixed records. Designed for zero-copy flush to disk.
 
 | Aspect | Detail |
 |--------|--------|
-| **Record format** | 4-byte little-endian length + payload |
-| **Memory** | Linux: `mmap(MAP_PRIVATE\|MAP_ANONYMOUS)`; others: `make([]byte)` |
+| **Block header** | First 8 bytes: `[4B block size][4B valid offset]`. Written by `PrepareForFlush()` before disk write |
+| **Record format** | 4-byte little-endian length + payload, starting at byte 8 |
+| **Memory** | Linux: `mmap(MAP_PRIVATE\|MAP_ANONYMOUS)` → page-aligned; others: `make([]byte)` |
+| **Size** | 4096-aligned capacity. Combined with page-aligned mmap, satisfies O_DIRECT requirements |
 | **Concurrency** | CAS on `offset`; `inflight` for in-flight write tracking |
 | **Swap signal** | At 90% capacity, returns `shouldSwap=true` for proactive swap |
+| **Zero-copy flush** | `FullBlock()` returns `data[0:capacity]` — passed directly to `pwritev`, no allocation or memcpy |
+
+**Buffer memory layout:**
+
+```
+Byte 0        4        8                                     offset        capacity
+┌────────────┬─────────┬──────┬─────────┬──────┬─────────┬────────────────┐
+│ block size │valid off│4B len│ record  │4B len│ record  │  zero padding  │
+│  (uint32)  │(uint32) │      │ N bytes │      │ M bytes │                │
+└────────────┴─────────┴──────┴─────────┴──────┴─────────┴────────────────┘
+▲ page-aligned (mmap)                                     ▲               ▲
+                                                       valid off    capacity (4096-aligned)
+```
 
 ---
 
@@ -216,7 +231,10 @@ lm.Close()
 | **Naming** | `{base}_{YYYY-MM-DD_HH-MM-SS}_{seq}.log.tmp` → renamed to `.log` on seal |
 | **Discovery** | Uploader scans `logs/` for `.log` files; `.tmp` files are skipped |
 | **Platform** | Linux: `O_DIRECT`, `Pwritev`, `Fallocate`; others: `os.WriteAt` |
-| **O_DIRECT alignment** | Each buffer is padded to 4096 bytes; `fileOffset` advances by padded total so it stays aligned. Zero-padding gaps between writes are skipped by the record reader (zero-length entries). |
+| **O_DIRECT alignment** | Structural: mmap gives page-aligned address, capacity is 4096-aligned. `fileOffset` advances by `capacity` per block — always aligned. No runtime padding needed |
+| **Zero-copy** | `WriteVectored` receives full mmap blocks and passes them directly to `pwritev` — zero allocation, zero memcpy |
+| **On-disk format** | Sequence of fixed-size blocks, each with an 8-byte header (see Buffer section) |
+| **Empty files** | Files with zero bytes (from shutdown after rotation) are removed, not sealed |
 
 ---
 
@@ -255,7 +273,9 @@ lm.Close()
 2. `Logger.LogBytes` → `ShardCollection.Write(data)` → random shard → `Shard.Write(data)`
 3. `Shard.Write` → active `Buffer.writeData(data)` → CAS on `offset`; on 90% full, `go trySwap()`
 4. `trySwap` → swap active buffer → `WaitForInflight` → send full buffer to `flushChan`
-5. `flushWorker` receives buffer → `collectBuffers` → `WaitForInflight` on each → `WriteVectored` → `Reset` buffers
+5. `flushWorker` receives buffer → `collectBuffers` → `WaitForInflight` → `PrepareForFlush` (write 8-byte header) → `WriteVectored(FullBlock())` → `Reset` buffers
+
+**Zero-copy flush detail:** The flush worker writes the block header into the first 8 bytes of the mmap buffer, then passes the full `data[0:capacity]` slice directly to `pwritev`. No heap allocation or `copy()`. The kernel reads directly from the mmap region. After `pwritev` returns (synchronous with `O_DSYNC`), the buffer is `Reset()` for reuse.
 
 ### Backpressure Path
 
@@ -299,7 +319,7 @@ Writer side:                    Uploader side:
 | `BufferSize` | int | — | Total buffer size (bytes). Split across shards |
 | `MaxFileSize` | int64 | — | Max size per log file before rotation |
 | `LogFilePath` | string | — | Base directory; `logs/` created underneath |
-| `FlushInterval` | time.Duration | 1m | Interval for periodic buffer flush; 0 = 1 minute |
+| `FlushInterval` | time.Duration | 5m | Interval for periodic buffer flush; 0 = 5 minutes |
 | `GCSUploadConfig` | *GCSUploadConfig | nil | Optional; nil disables uploader |
 
 ### GCSUploadConfig
@@ -369,6 +389,7 @@ lm, err := asyncloguploader.NewLoggerManager(cfg)
 - **NumShards**: Higher = less contention; ensure per-shard capacity >= 64 KB
 - **BufferSize**: Larger = fewer swaps, more memory
 - **ChunkSize**: 32 MB balances parallelism and GCS compose limits
+- **FlushInterval**: Longer = less write amplification from partial blocks; most data is flushed by capacity-triggered swaps regardless
 
 ---
 
@@ -526,6 +547,92 @@ In v1.0, sealed log files were discovered via symlinks in a separate `upload_rea
 | **Code complexity** | Symlink in `rotate()`, `Close()`, uploader | File extension check in uploader |
 
 The `.tmp` → `.log` rename already served as an atomic readiness signal, making the symlink layer redundant. Removing it eliminated an entire category of bugs (symlink creation failures, duplicate symlinks, missing directory) without losing any crash-safety guarantees.
+
+---
+
+## 17. Design Decision: Zero-Copy Block-Based Flush (v2.1)
+
+### Problem
+
+Linux `O_DIRECT` requires that every `pwritev` call has:
+1. **Buffer address** aligned to the filesystem block size (4096)
+2. **Buffer size** aligned to 4096
+3. **File offset** aligned to 4096
+
+In v2.0, the flush worker extracted `buf.data[8:offset]` (skipping the 8-byte header), allocated a new heap buffer padded to 4096, and copied all data into it before calling `pwritev`. This had three issues:
+
+1. **Silent data loss**: The file offset advanced by the actual data size (not the padded size), causing it to become misaligned after the first write. All subsequent `pwritev` calls failed with `EINVAL`, and the errors were silently ignored. Only the first flush per file made it to disk.
+2. **Allocation pressure**: Each flush allocated an 8 MB heap buffer (matching the shard buffer size), creating GC pressure.
+3. **Unnecessary memcpy**: The entire buffer contents were copied from the mmap region to the heap allocation on every flush.
+
+### Solution: Block-Based Format with Zero-Copy
+
+Instead of extracting and copying the valid data, the entire mmap buffer is flushed to disk as a single **block**. The first 8 bytes of each buffer serve as a self-describing header:
+
+```
+Block (one per buffer flush):
+┌────────────┬──────────┬──────────────────────┬──────────────┐
+│ block size │valid off │ records (4B len+data) │ zero padding │
+│  (uint32)  │ (uint32) │                      │              │
+└────────────┴──────────┴──────────────────────┴──────────────┘
+  bytes 0-3    bytes 4-7     bytes 8..validOff    ..capacity
+```
+
+**On-disk file = sequence of blocks:**
+
+```
+┌─────────┬─────────┬─────────┬───┐
+│ Block 0 │ Block 1 │ Block 2 │...│
+│ (cap B) │ (cap B) │ (cap B) │   │
+└─────────┴─────────┴─────────┴───┘
+```
+
+### Why This Works
+
+| O_DIRECT requirement | How it's satisfied |
+|---------------------|--------------------|
+| Buffer address aligned | `mmap(MAP_ANONYMOUS)` returns page-aligned memory |
+| Buffer size aligned | Buffer `capacity` is always `alignTo4096(perShardCap)` |
+| File offset aligned | `fileOffset` advances by `capacity` per block — always a multiple of 4096 |
+
+Alignment is **structural** (guaranteed by construction), not **runtime** (computed padding). It cannot break.
+
+### Flush Path Comparison
+
+| Aspect | v2.0 (copy + pad) | v2.1 (zero-copy block) |
+|--------|--------------------|------------------------|
+| Heap allocation per flush | 1 × `paddedSize` (~8 MB) | 0 |
+| Memcpy per flush | ~8 MB | 0 |
+| GC pressure | High (short-lived large slices) | None |
+| Alignment correctness | Runtime-computed (had bug) | Structural (by construction) |
+| File offset tracking | Must compute padded total | Always += `capacity` |
+
+### Trade-off: Write Amplification
+
+The entire block (including zero padding after valid data) is written to disk:
+
+| Flush trigger | % of buffer used | Amplification |
+|---------------|-----------------|---------------|
+| Capacity swap (90%+) | ~90% | ~1.1x |
+| Timer flush (partial) | Variable | Up to `capacity / validData` |
+
+With `FlushInterval = 5 min`, timer flushes are rare and the amplification is negligible. At high throughput, nearly all flushes are capacity-triggered at 90%+.
+
+### Reader
+
+The reader (consumer) parses the block format:
+
+```
+for each block:
+  read blockSize (4 bytes) → if 0, stop
+  read validOffset (4 bytes)
+  parse records in bytes [8..validOffset]:
+    read length (4 bytes) → if 0, skip
+    read record (length bytes)
+  advance to next block at current_pos + blockSize
+```
+
+The block format is self-describing: `blockSize` tells the reader the block boundary, `validOffset` tells it where valid records end. No external configuration is needed to parse a log file.
 
 ---
 

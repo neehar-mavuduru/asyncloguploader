@@ -166,17 +166,20 @@ func (l *Logger) handleFlush(first *Buffer) {
 		buf.WaitForInflight()
 	}
 
-	dataSlices := make([][]byte, 0, len(buffers))
+	// Zero-copy path: write block header into the first 8 bytes of each
+	// mmap buffer and pass the full buffer directly to pwritev. No heap
+	// allocation or memcpy.
+	blocks := make([][]byte, 0, len(buffers))
 	for _, buf := range buffers {
-		offset := buf.offset.Load()
-		if offset > int32(headerOffset) {
-			dataSlices = append(dataSlices, buf.data[headerOffset:offset])
+		if buf.HasData() {
+			buf.PrepareForFlush()
+			blocks = append(blocks, buf.FullBlock())
 		}
 	}
 
-	if len(dataSlices) > 0 {
-		if _, err := l.fileWriter.WriteVectored(dataSlices); err != nil {
-			log.Error().Err(err).Int("buffers", len(dataSlices)).Msg("WriteVectored failed, data lost")
+	if len(blocks) > 0 {
+		if _, err := l.fileWriter.WriteVectored(blocks); err != nil {
+			log.Error().Err(err).Int("blocks", len(blocks)).Msg("WriteVectored failed, data lost")
 		}
 	}
 

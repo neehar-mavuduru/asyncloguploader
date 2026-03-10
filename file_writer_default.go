@@ -42,7 +42,8 @@ func (w *SizeFileWriter) truncateFile(f *os.File, size int64) error {
 	return f.Truncate(size)
 }
 
-// WriteVectored writes multiple buffers sequentially to the current file.
+// WriteVectored writes complete buffer blocks sequentially to the current file.
+// Each buffer is a full block with an 8-byte header (block size + valid offset).
 func (w *SizeFileWriter) WriteVectored(buffers [][]byte) (int, error) {
 	if w.currentFile == nil {
 		return 0, nil
