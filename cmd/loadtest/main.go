@@ -290,7 +290,7 @@ func loadConfig() *loadTestConfig {
 		poolSize = 100
 	}
 
-	rps := getEnvInt("LOADTEST_RPS", 1000)
+	rps := getEnvInt("LOADTEST_RPS", 100)
 	if rps < 0 {
 		rps = 0
 	}

@@ -226,6 +226,7 @@ lm.Close()
 | Aspect | Detail |
 |--------|--------|
 | **Discovery** | `os.ReadDir(logsDir)`; upload files ending in `.log`, skip `.tmp` |
+| **Object path** | `{prefix}{eventName}/{date}/{hour}/{filename}` (e.g. `Image_search/gcs-flush/event1/2026-03-10/06/event1_2026-03-10_06-21-36_2.log`) |
 | **Chunking** | Configurable chunk size (default 32 MB); parallel upload |
 | **Compose** | GCS Compose API; multi-level for >32 chunks |
 | **Retry** | Exponential backoff; configurable max retries |
@@ -305,7 +306,7 @@ Writer side:                    Uploader side:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `BucketName` | string | — | GCS bucket name |
-| `ObjectPrefix` | string | "" | Prefix for object names |
+| `ObjectPrefix` | string | "" | Prefix for object names; final path is `{prefix}{eventName}/{date}/{hour}/{filename}` |
 | `ChunkSize` | int | 32 MB | Chunk size for parallel upload |
 | `MaxRetries` | int | 3 | Retries per file with exponential backoff |
 | `GRPCPoolSize` | int | 64 | gRPC connection pool size |

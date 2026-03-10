@@ -92,9 +92,11 @@ func TestUploader_ObjectNameDerivation(t *testing.T) {
 
 	name := u.deriveObjectName("event_2026-03-07_14-30-00_1.log")
 	assert.Contains(t, name, "prod/")
+	assert.Contains(t, name, "event/")           // event name in path
 	assert.Contains(t, name, "2026-03-07")
 	assert.Contains(t, name, "14")
 	assert.Contains(t, name, "event_2026-03-07_14-30-00_1.log")
+	assert.Equal(t, "prod/event/2026-03-07/14/event_2026-03-07_14-30-00_1.log", name)
 }
 
 func TestUploader_Stop_DrainsInFlight(t *testing.T) {

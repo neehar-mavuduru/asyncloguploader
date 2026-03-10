@@ -132,8 +132,11 @@ func (u *Uploader) scanAndUpload() {
 
 var timestampRe = regexp.MustCompile(`(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})`)
 
+// deriveObjectName builds the GCS object path as: {prefix}{eventName}/{date}/{hour}/{filename}.
+// The event name is extracted from the filename, which has the form {eventName}_{timestamp}_{seq}.log.
 func (u *Uploader) deriveObjectName(baseName string) string {
 	matches := timestampRe.FindStringSubmatch(baseName)
+	loc := timestampRe.FindStringIndex(baseName)
 
 	var t time.Time
 	if len(matches) >= 2 {
@@ -151,7 +154,13 @@ func (u *Uploader) deriveObjectName(baseName string) string {
 
 	datePart := t.Format("2006-01-02")
 	hourPart := t.Format("15")
-	return fmt.Sprintf("%s%s/%s/%s", u.config.ObjectPrefix, datePart, hourPart, baseName)
+
+	eventName := "unknown"
+	if len(loc) >= 1 && loc[0] > 0 {
+		eventName = baseName[:loc[0]-1] // everything before the underscore before timestamp
+	}
+
+	return fmt.Sprintf("%s%s/%s/%s/%s", u.config.ObjectPrefix, eventName, datePart, hourPart, baseName)
 }
 
 func (u *Uploader) uploadFileWithRetry(filePath string) {
