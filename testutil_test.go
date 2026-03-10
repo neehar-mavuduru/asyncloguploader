@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func makeTempDir(t *testing.T) string {
@@ -16,10 +17,11 @@ func makeTempDir(t *testing.T) string {
 func makeConfig(t *testing.T, baseDir string) Config {
 	t.Helper()
 	return Config{
-		NumShards:   4,
-		BufferSize:  1024 * 1024,
-		MaxFileSize: 512 * 1024,
-		LogFilePath: baseDir,
+		NumShards:     4,
+		BufferSize:    1024 * 1024,
+		MaxFileSize:  512 * 1024,
+		LogFilePath:   baseDir,
+		FlushInterval: 100 * time.Millisecond, // short interval for fast tests
 	}
 }
 

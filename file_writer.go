@@ -66,9 +66,13 @@ func (w *SizeFileWriter) rotate() error {
 	_ = w.truncateFile(w.currentFile, w.fileOffset)
 	w.currentFile.Close()
 
-	finalPath := tmpPathToFinalPath(w.currentFileTmpPath)
-	if err := os.Rename(w.currentFileTmpPath, finalPath); err != nil {
-		log.Error().Err(err).Str("src", w.currentFileTmpPath).Str("dst", finalPath).Msg("failed to rename tmp to final")
+	if w.fileOffset > 0 {
+		finalPath := tmpPathToFinalPath(w.currentFileTmpPath)
+		if err := os.Rename(w.currentFileTmpPath, finalPath); err != nil {
+			log.Error().Err(err).Str("src", w.currentFileTmpPath).Str("dst", finalPath).Msg("failed to rename tmp to final")
+		}
+	} else {
+		os.Remove(w.currentFileTmpPath)
 	}
 
 	if w.nextFile != nil && w.nextFileReady.Load() {
@@ -137,8 +141,12 @@ func (w *SizeFileWriter) Close() error {
 	_ = w.truncateFile(w.currentFile, w.fileOffset)
 	w.currentFile.Close()
 
-	finalPath := tmpPathToFinalPath(w.currentFileTmpPath)
-	_ = os.Rename(w.currentFileTmpPath, finalPath)
+	if w.fileOffset > 0 {
+		finalPath := tmpPathToFinalPath(w.currentFileTmpPath)
+		_ = os.Rename(w.currentFileTmpPath, finalPath)
+	} else {
+		os.Remove(w.currentFileTmpPath)
+	}
 
 	w.currentFile = nil
 

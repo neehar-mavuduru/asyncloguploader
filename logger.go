@@ -141,7 +141,7 @@ func (l *Logger) GetStats() *Statistics {
 func (l *Logger) flushWorker() {
 	defer l.wg.Done()
 
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(l.config.FlushInterval)
 	defer ticker.Stop()
 
 	for {

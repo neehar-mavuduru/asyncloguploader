@@ -181,6 +181,12 @@ func (u *Uploader) uploadFile(filePath string) error {
 		return fmt.Errorf("read file: %w", err)
 	}
 
+	// GCS Compose requires at least one source; skip empty files
+	if len(fileData) == 0 {
+		os.Remove(filePath)
+		return nil
+	}
+
 	baseName := filepath.Base(filePath)
 	objectName := u.deriveObjectName(baseName)
 	bucket := u.client.Bucket(u.config.BucketName)

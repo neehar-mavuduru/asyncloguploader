@@ -125,6 +125,8 @@ Applications need to log high-volume event data (e.g., ML training events, analy
 
 The `.tmp` → `.log` rename is the **atomic readiness signal**. The uploader discovers work by scanning `logs/` for `.log` files and skipping `.tmp` files. This eliminates the need for a separate `upload_ready/` directory and symlinks.
 
+**Empty files:** Files with zero bytes (e.g., from shutdown immediately after rotation) are not sealed; they are removed instead of renamed to `.log`. The uploader also skips any empty `.log` files it encounters.
+
 ---
 
 ## 4. Component Design
@@ -289,13 +291,14 @@ Writer side:                    Uploader side:
 
 ### Config
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `NumShards` | int | Number of shards (>=1). Auto-reduced if per-shard capacity < 64 KB |
-| `BufferSize` | int | Total buffer size (bytes). Split across shards |
-| `MaxFileSize` | int64 | Max size per log file before rotation |
-| `LogFilePath` | string | Base directory; `logs/` created underneath |
-| `GCSUploadConfig` | *GCSUploadConfig | Optional; nil disables uploader |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `NumShards` | int | — | Number of shards (>=1). Auto-reduced if per-shard capacity < 64 KB |
+| `BufferSize` | int | — | Total buffer size (bytes). Split across shards |
+| `MaxFileSize` | int64 | — | Max size per log file before rotation |
+| `LogFilePath` | string | — | Base directory; `logs/` created underneath |
+| `FlushInterval` | time.Duration | 1m | Interval for periodic buffer flush; 0 = 1 minute |
+| `GCSUploadConfig` | *GCSUploadConfig | nil | Optional; nil disables uploader |
 
 ### GCSUploadConfig
 

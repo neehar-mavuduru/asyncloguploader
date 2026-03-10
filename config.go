@@ -13,6 +13,7 @@ type Config struct {
 	BufferSize      int
 	MaxFileSize     int64
 	LogFilePath     string
+	FlushInterval   time.Duration // interval for periodic buffer flush; 0 = 1 minute
 	GCSUploadConfig *GCSUploadConfig
 }
 
@@ -27,10 +28,11 @@ type GCSUploadConfig struct {
 }
 
 const (
-	defaultChunkSize    = 32 * 1024 * 1024 // 32 MB
+	defaultChunkSize     = 32 * 1024 * 1024 // 32 MB
 	defaultMaxRetries   = 3
 	defaultGRPCPoolSize = 64
 	defaultPollInterval = 3 * time.Second
+	defaultFlushInterval = 1 * time.Minute
 	minShardCapacity    = 65536 // 64 KB
 )
 
@@ -48,6 +50,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LogFilePath == "" {
 		return fmt.Errorf("%w: LogFilePath must not be empty", ErrInvalidConfig)
+	}
+	if c.FlushInterval == 0 {
+		c.FlushInterval = defaultFlushInterval
 	}
 
 	originalShards := c.NumShards
