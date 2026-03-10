@@ -295,7 +295,7 @@ func loadConfig() *loadTestConfig {
 		rps = 0
 	}
 
-	logPath := getEnv("LOG_FILE_PATH", "/tmp/asyncloguploader-loadtest")
+	logPath := getEnv("LOG_FILE_PATH", "/mnt/localdisk/asyncloguploader-loadtest")
 
 	bufferMB := getEnvInt("LOADTEST_BUFFER_MB", 64)
 	maxFileMB := getEnvInt("LOADTEST_MAX_FILE_MB", 256)
